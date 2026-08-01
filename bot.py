@@ -6,15 +6,22 @@ import telebot
 from telebot import types
 from threading import Thread
 from flask import Flask, request
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # =============================================
-# ТОКЕН БОТА (ЗАМЕНИТЕ НА ВАШ!)
+# ТОКЕН БОТА (ЗАМЕНИТЕ НА ВАШ НОВЫЙ ТОКЕН!)
+# СРОЧНО: отзовите старый через @BotFather -> /revoke
 # =============================================
-TOKEN = "8805553209:AAH-cnePIF0OO_XxD6r0G-Ug7ymuW1dwGFc"
-bot = telebot.TeleBot(TOKEN)
+TOKEN = "AAGQBGtt1-as1azN1N26AAmjh2_ZdkhfBzU"
+
+# ВАЖНО: threaded=False для работы с webhook!
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # =============================================
-# ВЕБ-СЕРВЕР ДЛЯ RENDER (ЗАПУСКАЕТСЯ ПЕРВЫМ)
+# ВЕБ-СЕРВЕР ДЛЯ RENDER
 # =============================================
 app = Flask(__name__)
 
@@ -25,8 +32,6 @@ def home():
 
 
 def run_flask():
-    # Render передаёт порт через переменную окружения PORT.
-    # Если её нет (локальный запуск) - используем 10000 как раньше.
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
@@ -152,8 +157,6 @@ def get_last_expenses(user_id, limit=10):
 
 
 def delete_expense(expense_id, user_id):
-    # ВАЖНО: удаляем только если запись принадлежит этому user_id -
-    # иначе один пользователь мог бы удалить чужой расход, зная/подобрав id.
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute(
@@ -171,23 +174,19 @@ CATEGORIES = [
     "🍔 Еда",
     "🏠 Жильё",
     "🎮 Развлечения",
-    "💊 Здоровье",
     "👕 Одежда",
-    "💄 Красота",
-    "💡 Коммуналка",
-    "📱 Связь",
-    "👧 Ника",
+    "☎️ Связь",
+    "👩‍🦱 Ника",
     "⛽ Бензин",
     "💳 Кредит",
     "🏖️ Отдых",
     "🏥 Медицина",
-    "💅 Бьюти",
+    "💄 Бьюти",
     "🚬 Сигареты",
     "⚡ Энергетики",
     "🔧 Другое",
 ]
 
-# Разумный верхний предел суммы одного расхода (защита от inf/nan/огромных чисел)
 MAX_AMOUNT = 10_000_000
 
 
@@ -207,8 +206,6 @@ def main_menu_markup():
 
 def categories_markup():
     markup = types.InlineKeyboardMarkup(row_width=3)
-    # Используем ИНДЕКС категории в callback_data, а не сам текст -
-    # так короче (укладываемся в лимит Telegram 64 байта) и надёжнее.
     buttons = [
         types.InlineKeyboardButton(cat, callback_data=f"cat_{i}")
         for i, cat in enumerate(CATEGORIES)
@@ -259,7 +256,6 @@ def handle_callback(call):
     chat_id = call.message.chat.id
     message_id = call.message.message_id
 
-    # Отвечаем на callback сразу, чтобы у пользователя не крутились "часики" на кнопке
     try:
         bot.answer_callback_query(call.id)
     except Exception:
@@ -281,7 +277,7 @@ def handle_callback(call):
             return
         bot.edit_message_text(
             f"📂 Категория: <b>{html.escape(category)}</b>\n\n"
-            f"✏️ <i>Введи комментарий (или '-' чтобы пропустить):</i>",
+            f"️ <i>Введи комментарий (или '-' чтобы пропустить):</i>",
             chat_id, message_id, parse_mode="HTML", reply_markup=back_markup()
         )
         bot.register_next_step_handler(call.message, process_note_step, category)
@@ -314,7 +310,6 @@ def handle_callback(call):
             expense_id = int(call.data[4:])
         except ValueError:
             return
-        # Передаём user_id - удаляем только СВОИ расходы
         delete_expense(expense_id, user_id)
         bot.answer_callback_query(call.id, "✅ Удалено!")
         show_last_expenses(call)
@@ -358,7 +353,6 @@ def process_amount_step(message):
         bot.register_next_step_handler(message, process_amount_step)
         return
 
-    # Защита от inf / nan / отрицательных / абсурдно больших значений
     if not (0 < amount < MAX_AMOUNT):
         bot.send_message(
             message.chat.id,
@@ -379,7 +373,6 @@ def process_note_step(message, category):
     amount = user_amounts.pop(user_id, 0)
 
     if amount <= 0:
-        # Сессия истекла / была прервана - просим начать заново
         bot.send_message(
             message.chat.id,
             "⚠️ Сессия добавления истекла. Начни заново через меню.",
@@ -395,14 +388,13 @@ def process_note_step(message, category):
 
     add_expense(user_id, amount, category, note)
 
-    # Экранируем всё, что пришло от пользователя, перед вставкой в HTML-разметку
     safe_note = html.escape(note)
     safe_category = html.escape(category)
 
     note_text = f"\n📝 <i>{safe_note}</i>" if safe_note else ""
     bot.send_message(
         message.chat.id,
-        f"✅ <b>Записано!</b>\n\n💰 {amount} руб.\n📂 {safe_category}{note_text}",
+        f"✅ <b>Записано!</b>\n\n💰 {amount} руб.\n {safe_category}{note_text}",
         parse_mode="HTML", reply_markup=main_menu_markup()
     )
 
@@ -437,18 +429,17 @@ def show_last_expenses(call):
             parse_mode="HTML", reply_markup=back_markup()
         )
         return
-    text = "📋 <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
+    text = " <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
     markup = types.InlineKeyboardMarkup(row_width=1)
     for exp_id, amount, category, note, date in rows:
         safe_category = html.escape(category)
         safe_note = html.escape(note) if note else ""
         note_text = f" — {safe_note}" if safe_note else ""
         text += f"▫️ <b>{amount} руб.</b> — {safe_category}{note_text}\n   📅 {date[:16]}\n"
-        # Кнопка с эмодзи и суммой - текст короткий, category в button label не влияет на лимит callback_data
-        btn_label = f"🗑 Удалить: {amount}р. {category}"[:64]
+        btn_label = f" Удалить: {amount}р. {category}"[:64]
         markup.add(types.InlineKeyboardButton(btn_label, callback_data=f"del_{exp_id}"))
     text += "\n<i>Нажми на кнопку чтобы удалить:</i>"
-    markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
+    markup.add(types.InlineKeyboardButton(" Назад", callback_data="back_to_main"))
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
 
@@ -456,36 +447,35 @@ def show_last_expenses(call):
 def handle_text(msg):
     if msg.text != "/start":
         bot.send_message(msg.chat.id, "🤔 Используй кнопки меню. /start — главное меню.", reply_markup=main_menu_markup())
-# =============================================
-# ЗАПУСК ЧЕРЕЗ WEBHOOK (Правильный способ для Render)
-# =============================================
 
-# УКАЖИ ЗДЕСЬ СВОЙ ДОМЕН ИЗ PANNELI RENDER!
-# Пример: "https://my-bot.onrender.com" (БЕЗ слэша на конце)
+
+# =============================================
+# ЗАПУСК ЧЕРЕЗ WEBHOOK
+# =============================================
 RENDER_DOMAIN = "https://finance-bot-1-x0n2.onrender.com"
-
 WEBHOOK_URL_PATH = f"/{TOKEN}"
 
 @app.route(WEBHOOK_URL_PATH, methods=['POST'])
 def webhook():
+    logging.info("📩 Получено обновление от Telegram")
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
+        logging.info(f"✅ Update ID: {update.update_id}")
         bot.process_new_updates([update])
         return '', 200
     else:
+        logging.error("❌ Неверный Content-Type")
         return 'Unsupported Media Type', 415
 
 if __name__ == '__main__':
     webhook_url = f"{RENDER_DOMAIN}{WEBHOOK_URL_PATH}"
     
-    print(f"✅ Устанавливаю webhook: {webhook_url}")
+    logging.info(f"✅ Устанавливаю webhook: {webhook_url}")
     bot.remove_webhook()
-    bot.set_webhook(url=webhook_url)
+    bot.set_webhook(url=webhook_url, drop_pending_updates=True)
     
     port = int(os.environ.get("PORT", 10000))
-    print(f"✅ Запуск сервера на порту {port}...")
+    logging.info(f"✅ Запуск сервера на порту {port}...")
     
     app.run(host='0.0.0.0', port=port)
-
-
