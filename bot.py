@@ -282,18 +282,31 @@ def handle_callback(call):
         )
         bot.register_next_step_handler(call.message, process_note_step, category)
 
-    elif call.data == "stats":
-        today = get_total_today(user_id)
-        week = get_total_week(user_id)
-        month = get_total_month(user_id)
-        text = (
-            f"📊 <b>Статистика:</b>\n\n"
-            f"📅 Сегодня: <b>{today} руб.</b>\n"
-            f"📆 Неделя: <b>{week} руб.</b>\n"
-            f"🗓 Месяц: <b>{month} руб.</b>\n\n"
-            f"<i>Выбери период:</i>"
-        )
+        # ... предыдущий код ...
+    
+    elif call.data == "stats":  # ← НАЧАЛО ЗАМЕНЫ
+        stats = get_stats_by_category(user_id, 'month')
+        total = get_total_month(user_id)
+        
+        text = f"📊 <b>Статистика за месяц:</b>\n\n"
+        
+        if stats:
+            for cat, summ, count in stats:
+                safe_cat = html.escape(cat)
+                text += f"{safe_cat}: <b>{summ} руб.</b>\n"
+        else:
+            text += " Нет записей за месяц.\n"
+        
+        text += f"\n━━━━━━━━━━\n <b>Всего: {total} руб.</b>\n\n"
+        text += "<i>Выбери период:</i>"
+        
         bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=stats_markup())
+    
+    elif call.data == "stat_today":  # ← КОНЕЦ ЗАМЕНЫ (это оставляем!)
+        show_category_stats(call, 'today', '📅 За сегодня')
+    
+    
+
 
     elif call.data == "stat_today":
         show_category_stats(call, 'today', '📅 За сегодня')
