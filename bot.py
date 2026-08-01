@@ -5,7 +5,7 @@ import sqlite3
 import telebot
 from telebot import types
 from threading import Thread
-from flask import Flask
+from flask import Flask, request
 
 # =============================================
 # ТОКЕН БОТА (ЗАМЕНИТЕ НА ВАШ!)
@@ -456,22 +456,36 @@ def show_last_expenses(call):
 def handle_text(msg):
     if msg.text != "/start":
         bot.send_message(msg.chat.id, "🤔 Используй кнопки меню. /start — главное меню.", reply_markup=main_menu_markup())
-
-
 # =============================================
-# ЗАПУСК (СНАЧАЛА FLASK, ПОТОМ БОТ)
+# ЗАПУСК ЧЕРЕЗ WEBHOOK (Правильный способ для Render)
 # =============================================
+
+# УКАЖИ ЗДЕСЬ СВОЙ ДОМЕН ИЗ PANNELI RENDER!
+# Пример: "https://my-bot.onrender.com" (БЕЗ слэша на конце)
+RENDER_DOMAIN = "https://finance-bot-1-x0n2.onrender.com"
+
+WEBHOOK_URL_PATH = f"/{TOKEN}"
+
+@app.route(WEBHOOK_URL_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        return 'Unsupported Media Type', 415
+
 if __name__ == '__main__':
-    print("✅ Запускаю веб-сервер...")
-    Thread(target=run_flask, daemon=True).start()
-    print("✅ Веб-сервер запущен!")
-    print("✅ Запускаю бота...")
+    webhook_url = f"{RENDER_DOMAIN}{WEBHOOK_URL_PATH}"
+    
+    print(f"✅ Устанавливаю webhook: {webhook_url}")
+    bot.remove_webhook()
+    bot.set_webhook(url=webhook_url)
+    
+    port = int(os.environ.get("PORT", 10000))
+    print(f"✅ Запуск сервера на порту {port}...")
+    
+    app.run(host='0.0.0.0', port=port)
 
-    # Оборачиваем polling в цикл с перезапуском - если оборвётся сеть,
-    # бот не "умрёт" насовсем, а переподключится через 5 секунд.
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception as e:
-            print(f"⚠️ Polling упал с ошибкой: {e}. Перезапуск через 5 сек...")
-            time.sleep(5)
+
