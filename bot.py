@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ТОКЕН БОТА (ЗАМЕНИТЕ НА ВАШ НОВЫЙ ТОКЕН!)
 # СРОЧНО: отзовите старый через @BotFather -> /revoke
 # =============================================
-TOKEN = "AAHR0xBjhUlfH8V8-iIcDABcflBCPcB74CE"
+TOKEN = "8805553209:AAHR0xBjhUlfH8V8-iIcDABcflBCPcB74CE"
 
 # ВАЖНО: threaded=False для работы с webhook!
 bot = telebot.TeleBot(TOKEN, threaded=False)
