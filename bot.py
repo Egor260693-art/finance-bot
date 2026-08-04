@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # =============================================
 # ТОКЕН БОТА
 # =============================================
-TOKEN = "НОВЫЙ_ТОКЕН_ОТ_BOTFATHER"
+TOKEN = "8805553209:AAHR0xBjhUlfH8V8-iIcDABcflBCPcB74CE"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # =============================================
