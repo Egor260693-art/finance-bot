@@ -63,7 +63,7 @@ def init_db():
         logging.info("✅✅✅ БАЗА ДАННЫХ POSTGRESQL УСПЕШНО ПОДКЛЮЧЕНА И СОЗДАНА! ✅✅✅") # <-- ДОБАВЬ ЭТУ СТРОКУ
     finally:
         release_conn(conn)
-)
+
 
 init_db()
 
