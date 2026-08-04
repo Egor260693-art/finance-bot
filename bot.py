@@ -1,171 +1,183 @@
 import os
 import html
 import time
-import sqlite3
+import logging
+import psycopg2
+from psycopg2 import pool
 import telebot
 from telebot import types
-from threading import Thread
 from flask import Flask, request
-import logging
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # =============================================
-# ТОКЕН БОТА (ЗАМЕНИТЕ НА ВАШ НОВЫЙ ТОКЕН!)
-# СРОЧНО: отзовите старый через @BotFather -> /revoke
+# ТОКЕН БОТА
 # =============================================
-TOKEN = "8805553209:AAHR0xBjhUlfH8V8-iIcDABcflBCPcB74CE"
-
-# ВАЖНО: threaded=False для работы с webhook!
+TOKEN = "НОВЫЙ_ТОКЕН_ОТ_BOTFATHER"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # =============================================
-# ВЕБ-СЕРВЕР ДЛЯ RENDER
+# ВЕБ-СЕРВЕР
 # =============================================
 app = Flask(__name__)
-
 
 @app.route('/')
 def home():
     return "✅ Бот работает!"
 
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-
 # =============================================
-# БАЗА ДАННЫХ
+# БАЗА ДАННЫХ PostgreSQL
 # =============================================
-DB_PATH = 'finance.db'
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
+# Создаем пул соединений
+connection_pool = pool.SimpleConnectionPool(
+    minconn=1,
+    maxconn=5,
+    dsn=DATABASE_URL
+)
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    return conn
+    return connection_pool.getconn()
 
+def release_conn(conn):
+    connection_pool.putconn(conn)
 
 def init_db():
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            amount REAL,
-            category TEXT,
-            note TEXT,
-            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expenses (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER,
+                amount REAL,
+                category TEXT,
+                note TEXT,
+                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        cursor.close()
+    finally:
+        release_conn(conn)
 
 init_db()
 
-
 def add_expense(user_id, amount, category, note=""):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO expenses (user_id, amount, category, note) VALUES (?, ?, ?, ?)",
-        (user_id, amount, category, note)
-    )
-    conn.commit()
-    conn.close()
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO expenses (user_id, amount, category, note) VALUES (%s, %s, %s, %s)",
+            (user_id, amount, category, note)
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        release_conn(conn)
 
 def get_total_today(user_id):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date >= date('now')",
-        (user_id,)
-    )
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total if total else 0
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT SUM(amount) FROM expenses WHERE user_id = %s AND date::date = CURRENT_DATE",
+            (user_id,)
+        )
+        total = cursor.fetchone()[0]
+        cursor.close()
+        return total if total else 0
+    finally:
+        release_conn(conn)
 
 def get_total_week(user_id):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date >= date('now', '-7 days')",
-        (user_id,)
-    )
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total if total else 0
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT SUM(amount) FROM expenses WHERE user_id = %s AND date >= CURRENT_DATE - INTERVAL '7 days'",
+            (user_id,)
+        )
+        total = cursor.fetchone()[0]
+        cursor.close()
+        return total if total else 0
+    finally:
+        release_conn(conn)
 
 def get_total_month(user_id):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id = ? AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now')",
-        (user_id,)
-    )
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total if total else 0
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT SUM(amount) FROM expenses WHERE user_id = %s AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE) AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE)",
+            (user_id,)
+        )
+        total = cursor.fetchone()[0]
+        cursor.close()
+        return total if total else 0
+    finally:
+        release_conn(conn)
 
 def get_stats_by_category(user_id, period='month'):
     conn = get_conn()
-    cursor = conn.cursor()
-    if period == 'today':
-        cursor.execute(
-            "SELECT category, SUM(amount), COUNT(*) FROM expenses "
-            "WHERE user_id = ? AND date >= date('now') "
-            "GROUP BY category ORDER BY SUM(amount) DESC",
-            (user_id,)
-        )
-    elif period == 'week':
-        cursor.execute(
-            "SELECT category, SUM(amount), COUNT(*) FROM expenses "
-            "WHERE user_id = ? AND date >= date('now', '-7 days') "
-            "GROUP BY category ORDER BY SUM(amount) DESC",
-            (user_id,)
-        )
-    else:
-        cursor.execute(
-            "SELECT category, SUM(amount), COUNT(*) FROM expenses "
-            "WHERE user_id = ? AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now') "
-            "GROUP BY category ORDER BY SUM(amount) DESC",
-            (user_id,)
-        )
-    stats = cursor.fetchall()
-    conn.close()
-    return stats
-
+    try:
+        cursor = conn.cursor()
+        if period == 'today':
+            cursor.execute(
+                "SELECT category, SUM(amount), COUNT(*) FROM expenses "
+                "WHERE user_id = %s AND date::date = CURRENT_DATE "
+                "GROUP BY category ORDER BY SUM(amount) DESC",
+                (user_id,)
+            )
+        elif period == 'week':
+            cursor.execute(
+                "SELECT category, SUM(amount), COUNT(*) FROM expenses "
+                "WHERE user_id = %s AND date >= CURRENT_DATE - INTERVAL '7 days' "
+                "GROUP BY category ORDER BY SUM(amount) DESC",
+                (user_id,)
+            )
+        else:
+            cursor.execute(
+                "SELECT category, SUM(amount), COUNT(*) FROM expenses "
+                "WHERE user_id = %s AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE) AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE) "
+                "GROUP BY category ORDER BY SUM(amount) DESC",
+                (user_id,)
+            )
+        stats = cursor.fetchall()
+        cursor.close()
+        return stats
+    finally:
+        release_conn(conn)
 
 def get_last_expenses(user_id, limit=10):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, amount, category, note, date FROM expenses "
-        "WHERE user_id = ? ORDER BY date DESC LIMIT ?",
-        (user_id, limit)
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, amount, category, note, date FROM expenses "
+            "WHERE user_id = %s ORDER BY date DESC LIMIT %s",
+            (user_id, limit)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        release_conn(conn)
 
 def delete_expense(expense_id, user_id):
     conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM expenses WHERE id = ? AND user_id = ?",
-        (expense_id, user_id)
-    )
-    conn.commit()
-    conn.close()
-
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM expenses WHERE id = %s AND user_id = %s",
+            (expense_id, user_id)
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        release_conn(conn)
 
 # =============================================
 # КАТЕГОРИИ
@@ -173,22 +185,24 @@ def delete_expense(expense_id, user_id):
 CATEGORIES = [
     "🍔 Еда",
     "🏠 Жильё",
-    "🎮 Развлечения",
+    " Развлечения",
+    "💊 Здоровье",
     "👕 Одежда",
-    "☎️ Связь",
-    "👩‍🦱 Ника",
+    "💄 Красота",
+    "💡 Коммуналка",
+    "📱 Связь",
+    "👧 Ника",
     "⛽ Бензин",
     "💳 Кредит",
     "🏖️ Отдых",
     "🏥 Медицина",
-    "💄 Бьюти",
-    "🚬 Сигареты",
+    "💅 Бьюти",
+    " Сигареты",
     "⚡ Энергетики",
     "🔧 Другое",
 ]
 
 MAX_AMOUNT = 10_000_000
-
 
 # =============================================
 # КЛАВИАТУРЫ
@@ -203,7 +217,6 @@ def main_menu_markup():
     )
     return markup
 
-
 def categories_markup():
     markup = types.InlineKeyboardMarkup(row_width=3)
     buttons = [
@@ -213,7 +226,6 @@ def categories_markup():
     markup.add(*buttons)
     markup.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cancel"))
     return markup
-
 
 def stats_markup():
     markup = types.InlineKeyboardMarkup(row_width=3)
@@ -225,12 +237,10 @@ def stats_markup():
     )
     return markup
 
-
 def back_markup():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_main"))
+    markup.add(types.InlineKeyboardButton(" Назад в меню", callback_data="back_to_main"))
     return markup
-
 
 # =============================================
 # КОМАНДА /start
@@ -245,7 +255,6 @@ def start(message):
         parse_mode="HTML",
         reply_markup=main_menu_markup()
     )
-
 
 # =============================================
 # ОБРАБОТКА INLINE-КНОПОК
@@ -263,7 +272,7 @@ def handle_callback(call):
 
     if call.data == "add_expense":
         bot.edit_message_text(
-            "💰 <b>Введи сумму расхода:</b>\n\n<i>Просто отправь число в чат (например, 150)</i>",
+            " <b>Введи сумму расхода:</b>\n\n<i>Просто отправь число в чат (например, 150)</i>",
             chat_id, message_id, parse_mode="HTML", reply_markup=back_markup()
         )
         bot.register_next_step_handler(call.message, process_amount_step)
@@ -277,14 +286,12 @@ def handle_callback(call):
             return
         bot.edit_message_text(
             f"📂 Категория: <b>{html.escape(category)}</b>\n\n"
-            f"️ <i>Введи комментарий (или '-' чтобы пропустить):</i>",
+            f"✏️ <i>Введи комментарий (или '-' чтобы пропустить):</i>",
             chat_id, message_id, parse_mode="HTML", reply_markup=back_markup()
         )
         bot.register_next_step_handler(call.message, process_note_step, category)
 
-        # ... предыдущий код ...
-    
-    elif call.data == "stats":  # ← НАЧАЛО ЗАМЕНЫ
+    elif call.data == "stats":
         stats = get_stats_by_category(user_id, 'month')
         total = get_total_month(user_id)
         
@@ -295,21 +302,15 @@ def handle_callback(call):
                 safe_cat = html.escape(cat)
                 text += f"{safe_cat}: <b>{summ} руб.</b>\n"
         else:
-            text += " Нет записей за месяц.\n"
+            text += "📭 Нет записей за месяц.\n"
         
-        text += f"\n━━━━━━━━━━\n <b>Всего: {total} руб.</b>\n\n"
+        text += f"\n━━━━━━━━━━\n💸 <b>Всего: {total} руб.</b>\n\n"
         text += "<i>Выбери период:</i>"
         
         bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=stats_markup())
-    
-    elif call.data == "stat_today":  # ← КОНЕЦ ЗАМЕНЫ (это оставляем!)
-        show_category_stats(call, 'today', '📅 За сегодня')
-    
-    
-
 
     elif call.data == "stat_today":
-        show_category_stats(call, 'today', '📅 За сегодня')
+        show_category_stats(call, 'today', ' За сегодня')
     elif call.data == "stat_week":
         show_category_stats(call, 'week', '📆 За неделю')
     elif call.data == "stat_month":
@@ -344,12 +345,10 @@ def handle_callback(call):
     elif call.data == "cancel":
         bot.edit_message_text("❌ Отменено.", chat_id, message_id, reply_markup=main_menu_markup())
 
-
 # =============================================
 # ШАГИ ДОБАВЛЕНИЯ
 # =============================================
 user_amounts = {}
-
 
 def process_amount_step(message):
     user_id = message.from_user.id
@@ -380,7 +379,6 @@ def process_amount_step(message):
         parse_mode="HTML", reply_markup=categories_markup()
     )
 
-
 def process_note_step(message, category):
     user_id = message.from_user.id
     amount = user_amounts.pop(user_id, 0)
@@ -407,10 +405,9 @@ def process_note_step(message, category):
     note_text = f"\n📝 <i>{safe_note}</i>" if safe_note else ""
     bot.send_message(
         message.chat.id,
-        f"✅ <b>Записано!</b>\n\n💰 {amount} руб.\n {safe_category}{note_text}",
+        f"✅ <b>Записано!</b>\n\n💰 {amount} руб.\n📂 {safe_category}{note_text}",
         parse_mode="HTML", reply_markup=main_menu_markup()
     )
-
 
 def show_category_stats(call, period, name):
     user_id = call.from_user.id
@@ -432,45 +429,42 @@ def show_category_stats(call, period, name):
         text += "📭 Нет записей."
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=back_markup())
 
-
 def show_last_expenses(call):
     user_id = call.from_user.id
     rows = get_last_expenses(user_id)
     if not rows:
         bot.edit_message_text(
-            "📭 <b>Пусто.</b>", call.message.chat.id, call.message.message_id,
+            " <b>Пусто.</b>", call.message.chat.id, call.message.message_id,
             parse_mode="HTML", reply_markup=back_markup()
         )
         return
-    text = " <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
+    text = "📋 <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
     markup = types.InlineKeyboardMarkup(row_width=1)
     for exp_id, amount, category, note, date in rows:
         safe_category = html.escape(category)
         safe_note = html.escape(note) if note else ""
         note_text = f" — {safe_note}" if safe_note else ""
-        text += f"▫️ <b>{amount} руб.</b> — {safe_category}{note_text}\n   📅 {date[:16]}\n"
-        btn_label = f" Удалить: {amount}р. {category}"[:64]
+        text += f"▫️ <b>{amount} руб.</b> — {safe_category}{note_text}\n   📅 {str(date)[:16]}\n"
+        btn_label = f"🗑 Удалить: {amount}р. {category}"[:64]
         markup.add(types.InlineKeyboardButton(btn_label, callback_data=f"del_{exp_id}"))
     text += "\n<i>Нажми на кнопку чтобы удалить:</i>"
-    markup.add(types.InlineKeyboardButton(" Назад", callback_data="back_to_main"))
+    markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
-
 
 @bot.message_handler(func=lambda msg: True)
 def handle_text(msg):
     if msg.text != "/start":
         bot.send_message(msg.chat.id, "🤔 Используй кнопки меню. /start — главное меню.", reply_markup=main_menu_markup())
 
-
 # =============================================
-# ЗАПУСК ЧЕРЕЗ WEBHOOK
+# ЗАПУСК WEBHOOK
 # =============================================
 RENDER_DOMAIN = "https://finance-bot-1-x0n2.onrender.com"
 WEBHOOK_URL_PATH = f"/{TOKEN}"
 
 @app.route(WEBHOOK_URL_PATH, methods=['POST'])
 def webhook():
-    logging.info("📩 Получено обновление от Telegram")
+    logging.info(" Получено обновление от Telegram")
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
