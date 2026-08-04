@@ -3,7 +3,7 @@ import html
 import time
 import logging
 import psycopg2
-from psycopg2 import pool
+from urllib.parse import urlparse
 import telebot
 from telebot import types
 from flask import Flask, request
@@ -12,7 +12,7 @@ from flask import Flask, request
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # =============================================
-# ТОКЕН БОТА
+# ТОКЕН БОТА (ВСТАВЬТЕ СЮДА ВАШ ТОКЕН!)
 # =============================================
 TOKEN = "8805553209:AAHR0xBjhUlfH8V8-iIcDABcflBCPcB74CE"
 bot = telebot.TeleBot(TOKEN, threaded=False)
@@ -31,18 +31,16 @@ def home():
 # =============================================
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-# Создаем пул соединений
-connection_pool = pool.SimpleConnectionPool(
-    minconn=1,
-    maxconn=5,
-    dsn=DATABASE_URL
-)
-
 def get_conn():
-    return connection_pool.getconn()
-
-def release_conn(conn):
-    connection_pool.putconn(conn)
+    """Создаёт новое подключение к PostgreSQL"""
+    parsed = urlparse(DATABASE_URL)
+    return psycopg2.connect(
+        host=parsed.hostname,
+        port=parsed.port,
+        database=parsed.path[1:],  # убираем ведущий '/'
+        user=parsed.username,
+        password=parsed.password
+    )
 
 def init_db():
     conn = get_conn()
@@ -60,11 +58,13 @@ def init_db():
         ''')
         conn.commit()
         cursor.close()
-        logging.info("✅✅✅ БАЗА ДАННЫХ POSTGRESQL УСПЕШНО ПОДКЛЮЧЕНА И СОЗДАНА! ✅✅✅") # <-- ДОБАВЬ ЭТУ СТРОКУ
+        logging.info("✅✅✅ БАЗА ДАННЫХ POSTGRESQL УСПЕШНО ПОДКЛЮЧЕНА И СОЗДАНА! ✅✅✅")
+    except Exception as e:
+        logging.error(f"❌ Ошибка создания БД: {e}")
     finally:
-        release_conn(conn)
+        conn.close()
 
-
+# Инициализация БД
 init_db()
 
 def add_expense(user_id, amount, category, note=""):
@@ -78,7 +78,7 @@ def add_expense(user_id, amount, category, note=""):
         conn.commit()
         cursor.close()
     finally:
-        release_conn(conn)
+        conn.close()
 
 def get_total_today(user_id):
     conn = get_conn()
@@ -92,7 +92,7 @@ def get_total_today(user_id):
         cursor.close()
         return total if total else 0
     finally:
-        release_conn(conn)
+        conn.close()
 
 def get_total_week(user_id):
     conn = get_conn()
@@ -106,7 +106,7 @@ def get_total_week(user_id):
         cursor.close()
         return total if total else 0
     finally:
-        release_conn(conn)
+        conn.close()
 
 def get_total_month(user_id):
     conn = get_conn()
@@ -120,7 +120,7 @@ def get_total_month(user_id):
         cursor.close()
         return total if total else 0
     finally:
-        release_conn(conn)
+        conn.close()
 
 def get_stats_by_category(user_id, period='month'):
     conn = get_conn()
@@ -151,7 +151,7 @@ def get_stats_by_category(user_id, period='month'):
         cursor.close()
         return stats
     finally:
-        release_conn(conn)
+        conn.close()
 
 def get_last_expenses(user_id, limit=10):
     conn = get_conn()
@@ -166,7 +166,7 @@ def get_last_expenses(user_id, limit=10):
         cursor.close()
         return rows
     finally:
-        release_conn(conn)
+        conn.close()
 
 def delete_expense(expense_id, user_id):
     conn = get_conn()
@@ -179,7 +179,7 @@ def delete_expense(expense_id, user_id):
         conn.commit()
         cursor.close()
     finally:
-        release_conn(conn)
+        conn.close()
 
 # =============================================
 # КАТЕГОРИИ
@@ -200,8 +200,8 @@ CATEGORIES = [
     "🏥 Медицина",
     "💅 Бьюти",
     " Сигареты",
-    "⚡ Энергетики",
-    "🔧 Другое",
+    " Энергетики",
+    " Другое",
 ]
 
 MAX_AMOUNT = 10_000_000
@@ -212,7 +212,7 @@ MAX_AMOUNT = 10_000_000
 def main_menu_markup():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("➕ Добавить расход", callback_data="add_expense"),
+        types.InlineKeyboardButton(" Добавить расход", callback_data="add_expense"),
         types.InlineKeyboardButton("📊 Статистика", callback_data="stats"),
         types.InlineKeyboardButton("📋 Последние записи", callback_data="last"),
         types.InlineKeyboardButton("❓ Помощь", callback_data="help")
@@ -234,14 +234,14 @@ def stats_markup():
     markup.add(
         types.InlineKeyboardButton("📅 Сегодня", callback_data="stat_today"),
         types.InlineKeyboardButton("📆 Неделя", callback_data="stat_week"),
-        types.InlineKeyboardButton("🗓 Месяц", callback_data="stat_month"),
+        types.InlineKeyboardButton(" Месяц", callback_data="stat_month"),
         types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
     )
     return markup
 
 def back_markup():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(" Назад в меню", callback_data="back_to_main"))
+    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_main"))
     return markup
 
 # =============================================
@@ -274,7 +274,7 @@ def handle_callback(call):
 
     if call.data == "add_expense":
         bot.edit_message_text(
-            " <b>Введи сумму расхода:</b>\n\n<i>Просто отправь число в чат (например, 150)</i>",
+            "💰 <b>Введи сумму расхода:</b>\n\n<i>Просто отправь число в чат (например, 150)</i>",
             chat_id, message_id, parse_mode="HTML", reply_markup=back_markup()
         )
         bot.register_next_step_handler(call.message, process_amount_step)
@@ -284,10 +284,10 @@ def handle_callback(call):
             cat_index = int(call.data[4:])
             category = CATEGORIES[cat_index]
         except (ValueError, IndexError):
-            bot.answer_callback_query(call.id, "⚠️ Неизвестная категория")
+            bot.answer_callback_query(call.id, "️ Неизвестная категория")
             return
         bot.edit_message_text(
-            f"📂 Категория: <b>{html.escape(category)}</b>\n\n"
+            f" Категория: <b>{html.escape(category)}</b>\n\n"
             f"✏️ <i>Введи комментарий (или '-' чтобы пропустить):</i>",
             chat_id, message_id, parse_mode="HTML", reply_markup=back_markup()
         )
@@ -312,9 +312,9 @@ def handle_callback(call):
         bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=stats_markup())
 
     elif call.data == "stat_today":
-        show_category_stats(call, 'today', ' За сегодня')
+        show_category_stats(call, 'today', '📅 За сегодня')
     elif call.data == "stat_week":
-        show_category_stats(call, 'week', '📆 За неделю')
+        show_category_stats(call, 'week', ' За неделю')
     elif call.data == "stat_month":
         show_category_stats(call, 'month', '🗓 За месяц')
 
@@ -436,11 +436,11 @@ def show_last_expenses(call):
     rows = get_last_expenses(user_id)
     if not rows:
         bot.edit_message_text(
-            " <b>Пусто.</b>", call.message.chat.id, call.message.message_id,
+            "📭 <b>Пусто.</b>", call.message.chat.id, call.message.message_id,
             parse_mode="HTML", reply_markup=back_markup()
         )
         return
-    text = "📋 <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
+    text = " <b>Последние записи:</b>\n━━━━━━━━━━\n\n"
     markup = types.InlineKeyboardMarkup(row_width=1)
     for exp_id, amount, category, note, date in rows:
         safe_category = html.escape(category)
@@ -466,7 +466,7 @@ WEBHOOK_URL_PATH = f"/{TOKEN}"
 
 @app.route(WEBHOOK_URL_PATH, methods=['POST'])
 def webhook():
-    logging.info(" Получено обновление от Telegram")
+    logging.info("📩 Получено обновление от Telegram")
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
